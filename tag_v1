@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer Tag Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #2c3e50;
+            font-family: Arial, sans-serif;
+        }
+        #gameContainer {
+            text-align: center;
+        }
+        #gameCanvas {
+            border: 2px solid #ecf0f1;
+            background-color: #34495e;
+        }
+        #scoreBoard {
+            color: #ecf0f1;
+            margin-top: 10px;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="600" height="400"></canvas>
+        <div id="scoreBoard"></div>
+    </div>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreBoard = document.getElementById('scoreBoard');
+        const socket = new WebSocket('ws://192.168.1.224:8080/ws');
+        let players = {};
+        let myId = null;
+
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            switch (data.type) {
+                case 'id':
+                    myId = data.id;
+                    console.log('My ID:', myId);
+                    break;
+                case 'state':
+                    players = data.players;
+                    drawGame();
+                    updateScoreBoard();
+                    break;
+            }
+        };
+
+        function drawGame() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (const id in players) {
+                const player = players[id];
+                ctx.fillStyle = player.isIt ? 'red' : (id === myId ? 'blue' : 'green');
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, 15, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+
+        function updateScoreBoard() {
+            let scores = Object.values(players)
+                .map(p => `${p.id}: ${p.score}`)
+                .join(' | ');
+            scoreBoard.textContent = scores;
+        }
+
+        document.addEventListener('keydown', (event) => {
+            if (!myId || !players[myId]) return;
+
+            const player = players[myId];
+            let moved = false;
+            const speed = 5;
+
+            switch (event.key) {
+                case 'ArrowUp':
+                    player.y = Math.max(15, player.y - speed);
+                    moved = true;
+                    break;
+                case 'ArrowDown':
+                    player.y = Math.min(canvas.height - 15, player.y + speed);
+                    moved = true;
+                    break;
+                case 'ArrowLeft':
+                    player.x = Math.max(15, player.x - speed);
+                    moved = true;
+                    break;
+                case 'ArrowRight':
+                    player.x = Math.min(canvas.width - 15, player.x + speed);
+                    moved = true;
+                    break;
+            }
+
+            if (moved) {
+                socket.send(JSON.stringify({
+                    action: 'move',
+                    x: player.x,
+                    y: player.y
+                }));
+            }
+        });
+
+        socket.onopen = () => console.log('Connected to server');
+        socket.onerror = (error) => console.error('WebSocket Error:', error);
+        socket.onclose = () => console.log('Disconnected from server');
+    </script>
+</body>
+</html>
