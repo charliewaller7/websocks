@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer Games</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #2c3e50;
+            font-family: Arial, sans-serif;
+        }
+        #gameContainer {
+            display: flex;
+        }
+        #canvasContainer {
+            text-align: center;
+        }
+        #gameCanvas {
+            border: 2px solid #ecf0f1;
+            background-color: #34495e;
+        }
+        #scoreBoard {
+            color: #ecf0f1;
+            margin-top: 10px;
+            font-size: 18px;
+        }
+        #gameMenu {
+            width: 200px;
+            background-color: #34495e;
+            padding: 20px;
+            color: #ecf0f1;
+        }
+        .gameOption {
+            cursor: pointer;
+            padding: 10px;
+            margin-bottom: 10px;
+            background-color: #2c3e50;
+            border-radius: 5px;
+        }
+        .gameOption:hover {
+            background-color: #3c5a7d;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="canvasContainer">
+            <canvas id="gameCanvas" width="600" height="400"></canvas>
+            <div id="scoreBoard"></div>
+        </div>
+        <div id="gameMenu"></div>
+    </div>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreBoard = document.getElementById('scoreBoard');
+        const gameMenu = document.getElementById('gameMenu');
+        const socket = new WebSocket('ws://192.168.1.224:8080/ws');
+        let game = null;
+        let myId = null;
+
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            switch (data.type) {
+                case 'id':
+                    myId = data.id;
+                    console.log('My ID:', myId);
+                    populateGameMenu(data.games);
+                    break;
+                case 'state':
+                    game = data.game;
+                    drawGame();
+                    updateScoreBoard();
+                    break;
+            }
+        };
+
+        function populateGameMenu(games) {
+            gameMenu.innerHTML = '<h2>Games</h2>';
+            games.forEach(game => {
+                const gameOption = document.createElement('div');
+                gameOption.className = 'gameOption';
+                gameOption.textContent = game.name;
+                gameOption.onclick = () => joinGame(game.id);
+                gameMenu.appendChild(gameOption);
+            });
+        }
+
+        function joinGame(gameId) {
+            socket.send(JSON.stringify({action: 'join', gameId: gameId}));
+        }
+
+        function drawGame() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw walls only for shooter game
+            if (game.type === 'shooter' && game.walls) {
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 2;
+                game.walls.forEach(wall => {
+                    ctx.beginPath();
+                    ctx.moveTo(wall.x1, wall.y1);
+                    ctx.lineTo(wall.x2, wall.y2);
+                    ctx.stroke();
+                });
+            }
+
+            // Draw players
+            for (const id in game.players) {
+                const player = game.players[id];
+                if (game.type === 'tag') {
+                    ctx.fillStyle = player.isIt ? 'red' : (id === myId ? 'blue' : 'green');
+                } else if (game.type === 'shooter') {
+                    ctx.fillStyle = player.role === 'defender' ? 'blue' : 'red';
+                }
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, 15, 0, 2 * Math.PI);
+                ctx.fill();
+
+                // Draw shooting line for defender in shooter game
+                if (game.type === 'shooter' && player.role === 'defender') {
+                    drawShootingLine(player);
+                }
+            }
+
+            // Draw semicircle for defender in shooter game
+            if (game.type === 'shooter') {
+                const defender = Object.values(game.players).find(p => p.role === 'defender');
+                if (defender) {
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                    ctx.beginPath();
+                    ctx.arc(defender.x, defender.y, 50, Math.PI, 2 * Math.PI);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        function drawShootingLine(player) {
+            const endX = player.x + Math.cos(player.shootAngle) * 1000;
+            const endY = player.y + Math.sin(player.shootAngle) * 1000;
+            
+            ctx.strokeStyle = 'yellow';
+            ctx.beginPath();
+            ctx.moveTo(player.x, player.y);
+
+            let closestIntersection = null;
+            let minDistance = Infinity;
+
+            // Check intersections with walls
+            game.walls.forEach(wall => {
+                const intersection = lineIntersectsLine(
+                    player.x, player.y, endX, endY,
+                    wall.x1, wall.y1, wall.x2, wall.y2
+                );
+                if (intersection) {
+                    const distance = Math.sqrt(
+                        Math.pow(intersection.x - player.x, 2) +
+                        Math.pow(intersection.y - player.y, 2)
+                    );
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closestIntersection = intersection;
+                    }
+                }
+            });
+
+            if (closestIntersection) {
+                ctx.lineTo(closestIntersection.x, closestIntersection.y);
+            } else {
+                ctx.lineTo(endX, endY);
+            }
+            ctx.stroke();
+        }
+
+        function lineIntersectsLine(x1, y1, x2, y2, x3, y3, x4, y4) {
+            const uA = ((x4-x3)*(y1-y3) - (y4-y3)*(x1-x3)) / ((y4-y3)*(x2-x1) - (x4-x3)*(y2-y1));
+            const uB = ((x2-x1)*(y1-y3) - (y2-y1)*(x1-x3)) / ((y4-y3)*(x2-x1) - (x4-x3)*(y2-y1));
+
+            if (uA >= 0 && uA <= 1 && uB >= 0 && uB <= 1) {
+                const intersectionX = x1 + (uA * (x2-x1));
+                const intersectionY = y1 + (uA * (y2-y1));
+                return {x: intersectionX, y: intersectionY};
+            }
+            return null;
+        }
+
+        function updateScoreBoard() {
+            let scores = Object.values(game.players)
+                .map(p => `${p.id}: ${p.score}`)
+                .join(' | ');
+            scoreBoard.textContent = scores;
+        }
+
+        document.addEventListener('keydown', (event) => {
+            if (!myId || !game || !game.players[myId]) return;
+
+            const player = game.players[myId];
+            let moved = false;
+            const speed = 10; // Increased speed
+
+            switch (event.key) {
+                case 'ArrowUp':
+                    player.y = Math.max(15, player.y - speed);
+                    moved = true;
+                    break;
+                case 'ArrowDown':
+                    player.y = Math.min(canvas.height - 15, player.y + speed);
+                    moved = true;
+                    break;
+                case 'ArrowLeft':
+                    player.x = Math.max(15, player.x - speed);
+                    moved = true;
+                    break;
+                case 'ArrowRight':
+                    player.x = Math.min(canvas.width - 15, player.x + speed);
+                    moved = true;
+                    break;
+            }
+
+            if (moved) {
+                socket.send(JSON.stringify({
+                    action: 'move',
+                    x: player.x,
+                    y: player.y
+                }));
+            }
+        });
+
+        canvas.addEventListener('mousemove', (event) => {
+            if (!myId || !game || !game.players[myId]) return;
+
+            const player = game.players[myId];
+            if (game.type === 'shooter' && player.role === 'defender') {
+                const rect = canvas.getBoundingClientRect();
+                const x = event.clientX - rect.left;
+                const y = event.clientY - rect.top;
+                const angle = Math.atan2(y - player.y, x - player.x);
+                
+                socket.send(JSON.stringify({
+                    action: 'shoot',
+                    angle: angle
+                }));
+            }
+        });
+
+        socket.onopen = () => console.log('Connected to server');
+        socket.onerror = (error) => console.error('WebSocket Error:', error);
+        socket.onclose = () => console.log('Disconnected from server');
+    </script>
+</body>
+</html>                    
